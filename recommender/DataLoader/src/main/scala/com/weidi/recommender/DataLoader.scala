@@ -67,10 +67,10 @@ object DataLoader {
     // 准备配置
     val config = Map(
       "spark.cores" -> "local[*]",
-      "mongo.uri" -> "mongodb://localhost:27017/recommender",
+      "mongo.uri" -> "mongodb://192.168.1.180:27017/recommender",
       "mongo.db" -> "recommender",
-      "es.httpHosts" -> "localhost:9200",
-      "es.transportHosts" -> "localhost:9300",
+      "es.httpHosts" -> "192.168.1.180:9200",
+      "es.transportHosts" -> "192.168.1.180:9300",
       "es.index" -> "recommender",
       "es.cluster.name" -> "elasticsearch"
     )
@@ -90,7 +90,7 @@ object DataLoader {
     println("========= 处理数据 =========")
     val movieDF = rawMovieRDD.map(
       line => {
-        val parts = line.split("^")
+        val parts = line.split("\\^")
         Movie(parts(0).toInt, parts(1), parts(2), parts(3), parts(4), parts(5),
           parts(6), parts(7), parts(8), parts(9));
       }

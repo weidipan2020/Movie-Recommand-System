@@ -6,17 +6,19 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 import java.text.SimpleDateFormat
 import java.util.Date
 
-// TODO: 定义样例类
-case class Movie(mid: Int, name: String, descri: String, timelong: String, issue: String,
-                 shoot: String, language: String, genres: String, actors: String, directors: String)
-case class Rating(uid: Int, mid: Int, score: Double, timestamp: Int)
 
-case class MongoConfig(uri: String, db: String)
-
-case class Recommendation(mid: Int, score: Double)
-case class GenresRecommendation(genres: String, recs: Seq[Recommendation])
 
 object StatisticsRecommender {
+  // TODO: 定义样例类
+  case class Movie(mid: Int, name: String, descri: String, timelong: String,
+                   shoot: String, issue: String, language: String, genres: String,
+                   director: String, actors: String)
+  case class Rating(uid: Int, mid: Int, score: Double, timestamp: Int)
+
+  case class MongoConfig(uri: String, db: String)
+
+  case class Recommendation(mid: Int, score: Double)
+  case class GenresRecommendation(genres: String, recs: Seq[Recommendation])
 
   // TODO: 定义常量
   //1.1 定义表名
@@ -33,7 +35,7 @@ object StatisticsRecommender {
     // set a config
     val config = Map(
       "spark.cores" -> "local[*]",
-      "mongo.uri" -> "mongodb://localhost:27017/recommender",
+      "mongo.uri" -> "mongodb://192.168.1.180:27017/recommender",
       "mongo.db" -> "recommender"
     )
 
@@ -85,12 +87,12 @@ object StatisticsRecommender {
     val simpleDateFormat = new SimpleDateFormat("yyyyMM")
     // 注册udf，把时间戳转换成年月格式
     sparkSession.udf.register("changeDate", (x: Int) =>
-    simpleDateFormat.format(new Date(x * 1000L)).toInt)
+      simpleDateFormat.format(new Date(x * 1000L)).toInt)
 
     // 对原始数据做预处理，去掉uid
     sparkSession.sql(
       "select mid, score, changeDate(timestamp) as yyyyMM" +
-      "from ratings"
+        "from ratings"
     ).createOrReplaceTempView("ratingsInMonth")
 
     // 从ratingOfMonth中查找电影在各个月份的评分，mid，count，yearmonth
@@ -130,8 +132,8 @@ object StatisticsRecommender {
       .filter{
         case (genre, movieRow) =>
           movieRow.getAs[String]("genres")
-          .toLowerCase
-          .contains(genre.toLowerCase)
+            .toLowerCase
+            .contains(genre.toLowerCase)
       }
       .map{
         case (genre, movieRow) =>
@@ -140,7 +142,7 @@ object StatisticsRecommender {
       .groupByKey()
       .map{
         case (genre, items) =>
-          GenresRecommendation(genre, items.toList.sortWith(_._2>_._2).take(10).map(item=>Recommendation(item._1, item._2))
+          GenresRecommendation(genre, items.toList.sortWith(_._2>_._2).take(10).map(item=>Recommendation(item._1, item._2)))
       }.toDF()
 
     storeDFToMongoDB(topGenreMovies, GENRES_TOP_MOVIES)
