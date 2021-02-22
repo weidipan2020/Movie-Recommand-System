@@ -98,6 +98,8 @@ object ContentRecommender {
           MovieRecs(mid, items.toArray.sortWith(_._2 > _._2).map(x => Recommendation(x._1, x._2)))
       }
       .toDF()
+
+//    movieRecs.show(truncate = false)
     movieRecs.write
       .option("uri", mongoConfig.uri)
       .option("collection", CONTENT_MOVIE_RECS)
