@@ -1,3 +1,4 @@
 recommender/DataLoader/target
 .idea/*.xml
 recommender/StatisticsRecommender/target
+recommender/ContentRecommender/target
