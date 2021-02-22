@@ -2,7 +2,9 @@ package com.weidi.content
 
 import org.apache.spark.SparkConf
 import org.apache.spark.ml.feature.{HashingTF, IDF, Tokenizer}
+import org.apache.spark.ml.linalg.SparseVector
 import org.apache.spark.sql.SparkSession
+import org.jblas.DoubleMatrix
 
 // 需要的数据源是电影内容信息
 case class Movie(mid: Int, name: String, descri: String, timelong: String,
@@ -69,9 +71,44 @@ object ContentRecommender {
     // 用模型对原数据进行处理，得到文档中每个词的tf-idf，作为新的特征向量
     val rescaledData = idfModel.transform(featurizedData)
 
-    rescaledData.show(truncate = false)
+//    rescaledData.show(truncate = false)
+    val movieFeatures = rescaledData.map(
+      x =>
+        (x.getAs[Int]("mid"), x.getAs[SparseVector]("features").toArray)
+    )
+      .rdd
+      .map(
+        x =>
+          (x._1, new DoubleMatrix(x._2))
+      )
+//    movieFeatures.collect().foreach(println)
+
+    // 对所有电影两两计算它们的相似度，先做笛卡尔积
+    val movieRecs = movieFeatures.cartesian(movieFeatures)
+      .filter{
+        case (m1, m2) =>
+          m1._1 != m2._1
+      }
+      .map{
+        case (m1, m2) => (m1._1, (m2._1, cosinSim(m1._2, m2._2):Double))
+      }
+      .groupByKey()
+      .map{
+        case (mid, items) =>
+          MovieRecs(mid, items.toArray.sortWith(_._2 > _._2).map(x => Recommendation(x._1, x._2)))
+      }
+      .toDF()
+    movieRecs.write
+      .option("uri", mongoConfig.uri)
+      .option("collection", CONTENT_MOVIE_RECS)
+      .mode("overwrite")
+      .format("com.mongodb.spark.sql")
+      .save()
+
+    spark.stop()
   }
 
-
-
+  def cosinSim(matrix1: DoubleMatrix, matrix2: DoubleMatrix): Double = {
+    matrix1.dot(matrix2) / (matrix1.norm2() * matrix2.norm2())
+  }
 }
