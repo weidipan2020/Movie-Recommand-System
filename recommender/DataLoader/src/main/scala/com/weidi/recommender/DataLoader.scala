@@ -3,7 +3,6 @@ package com.weidi.recommender
 import com.mongodb.casbah.commons.MongoDBObject
 import com.mongodb.casbah.{MongoClient, MongoClientURI}
 import org.apache.spark.SparkConf
-import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.elasticsearch.action.admin.indices.create.CreateIndexRequest
 import org.elasticsearch.action.admin.indices.delete.DeleteIndexRequest
@@ -67,10 +66,10 @@ object DataLoader {
     // 准备配置
     val config = Map(
       "spark.cores" -> "local[*]",
-      "mongo.uri" -> "mongodb://192.168.1.180:27017/recommender",
+      "mongo.uri" -> "mongodb://rs100:27017/recommender",
       "mongo.db" -> "recommender",
-      "es.httpHosts" -> "192.168.1.180:9200",
-      "es.transportHosts" -> "192.168.1.180:9300",
+      "es.httpHosts" -> "rs100:9200",
+      "es.transportHosts" -> "rs100:9300",
       "es.index" -> "recommender",
       "es.cluster.name" -> "elasticsearch"
     )
@@ -80,11 +79,10 @@ object DataLoader {
 
     import spark.implicits._
     // 导入数据
-    val sc = spark.sparkContext
     println("========= 读取数据 =========")
-    val rawMovieRDD = sc.textFile(MOVIES_DATA_PATH)
-    val rawRatingRDD = sc.textFile(RATINGS_DATA_PATH)
-    val rawTagRDD = sc.textFile(TAGS_DATA_PATH)
+    val rawMovieRDD = spark.sparkContext.textFile(MOVIES_DATA_PATH)
+    val rawRatingRDD = spark.sparkContext.textFile(RATINGS_DATA_PATH)
+    val rawTagRDD = spark.sparkContext.textFile(TAGS_DATA_PATH)
 
     // 数据处理
     println("========= 处理数据 =========")
@@ -102,6 +100,7 @@ object DataLoader {
         Rating(parts(0).toInt, parts(1).toInt, parts(2).toDouble, parts(3).toInt)
       }
     ).toDF()
+//    ratingDF.show(truncate = false)
 
     val tagDF = rawTagRDD.map(
       line => {
@@ -112,23 +111,30 @@ object DataLoader {
 
     // 将数据保存到MongoDB
     implicit val mongoConfig = MongoConfig(config("mongo.uri"), config("mongo.db"))
-    dataToMongoDB(movieDF, ratingDF, tagDF)
 
+    dataToMongoDB(movieDF, ratingDF, tagDF)
+    println("successfully save data to MongoDB>>>>>>>>>>>>")
+
+    /**
+      存到ES中
+     */
     // 数据预处理
     import org.apache.spark.sql.functions._
+
     val newTag = tagDF.groupBy($"mid")
-      .agg( concat_ws( "|", collect_set($"tag") ).as("tags") )
+      .agg(concat_ws("|", collect_set($"tag")).as("tags"))
       .select("mid", "tags")
 
     val movieWithTagsDF = movieDF.join(newTag, Seq("mid"), "left")
 
     implicit val esConfig = ESConfig(config("es.httpHosts"), config("es.transportHosts"), config("es.index"), config("es.cluster.name"))
-    dataToES(movieWithTagsDF)
 
     // 保存数据到ES
+    dataToES(movieWithTagsDF)
+//    storeDataInES(movieWithTagsDF)
+    println("successfully save data to ES>>>>>>>>>>>>>>>>")
 
     // 关闭资源
-    sc.stop()
     spark.stop()
   }
 
@@ -150,14 +156,14 @@ object DataLoader {
 
     ratingDF.write
       .option("uri", mongoConfig.uri)
-      .option("collection", RATINGS_DATA_PATH)
+      .option("collection", MONGODB_RATING_COLLECTION)
       .mode("overwrite")
       .format("com.mongodb.spark.sql")
       .save()
 
     tagDF.write
       .option("uri", mongoConfig.uri)
-      .option("collection", TAGS_DATA_PATH)
+      .option("collection", MONGODB_TAG_COLLECTION)
       .mode("overwrite")
       .format("com.mongodb.spark.sql")
       .save()
@@ -180,7 +186,7 @@ object DataLoader {
     val esClient = new PreBuiltTransportClient(settings)
 
     val REGEX_HOST_PORT = "(.+):(\\d+)".r
-    esConfig.transportHosts.split(",").foreach{
+    esConfig.transportHosts.split(",").foreach {
       case REGEX_HOST_PORT(host: String, port: String) => {
         esClient.addTransportAddress(new InetSocketTransportAddress(InetAddress.getByName(host), port.toInt))
       }
@@ -188,7 +194,7 @@ object DataLoader {
 
     // 先清理遗留的数据
     if (esClient.admin().indices().exists(new IndicesExistsRequest(esConfig.index))
-    .actionGet().isExists) {
+      .actionGet().isExists) {
       esClient.admin().indices().delete(new DeleteIndexRequest(esConfig.index))
     }
 
@@ -201,5 +207,38 @@ object DataLoader {
       .mode("overwrite")
       .format("org.elasticsearch.spark.sql")
       .save(esConfig.index + "/" + ES_MOVIE_INDEX)
+  }
+
+  def storeDataInES(movieDF: DataFrame)(implicit eSConfig: ESConfig): Unit = {
+    // 新建es配置
+    val settings: Settings = Settings.builder().put("cluster.name", eSConfig.clustername).build()
+
+    // 新建一个es客户端
+    val esClient = new PreBuiltTransportClient(settings)
+
+    val REGEX_HOST_PORT = "(.+):(\\d+)".r
+    eSConfig.transportHosts.split(",").foreach {
+      case REGEX_HOST_PORT(host: String, port: String) => {
+        esClient.addTransportAddress(new InetSocketTransportAddress(InetAddress.getByName(host), port.toInt))
+      }
+    }
+
+    // 先清理遗留的数据
+    if (esClient.admin().indices().exists(new IndicesExistsRequest(eSConfig.index))
+      .actionGet()
+      .isExists
+    ) {
+      esClient.admin().indices().delete(new DeleteIndexRequest(eSConfig.index))
+    }
+
+    esClient.admin().indices().create(new CreateIndexRequest(eSConfig.index))
+
+    movieDF.write
+      .option("es.nodes", eSConfig.httpHosts)
+      .option("es.http.timeout", "100m")
+      .option("es.mapping.id", "mid")
+      .mode("overwrite")
+      .format("org.elasticsearch.spark.sql")
+      .save(eSConfig.index + "/" + ES_MOVIE_INDEX)
   }
 }
